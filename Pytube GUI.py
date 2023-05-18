@@ -4,11 +4,15 @@ from tkinter import filedialog
 from pytube import YouTube
 from pytube import Playlist
 from PIL import Image
+import threading
 import requests
 import re
 import os
 import sys
 from pathlib import Path
+# Todo:
+# Rework file system as a class, rather than a list
+# Learn + add threading
 
 class ProgressFrame():
     def __init__(self, master, text):
@@ -40,6 +44,10 @@ class ProgressFrame():
     def done(self):
         self.frame.destroy()
         self.master.update()
+
+class Video():
+    def __init__(self):
+        super().__init__()
 
 class App(ctk.CTk):
     def __init__(self):
