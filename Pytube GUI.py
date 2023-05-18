@@ -7,6 +7,7 @@ from PIL import Image
 import requests
 import re
 import os
+import sys
 from pathlib import Path
 
 class ProgressFrame():
@@ -24,21 +25,21 @@ class ProgressFrame():
         self.progressBar = ctk.CTkProgressBar(self.frame, width = 400)
         self.progressBar.set(0)
         self.progressBar.pack()
-        self.master.update_idletasks()
+        self.master.update()
 
     def progress(self, increment):
         self.progressBar.set(round(self.progressBar.get() + (increment/100), 4))
         self.progressText.configure(text = f"{self.text}\n{round(self.progressBar.get()*100, 1)}%")
-        self.master.update_idletasks()
+        self.master.update()
     
     def set(self, value):
         self.progressBar.set(value)
         self.progressText.configure(text = f"{self.text}\n{round(value*100, 1)}%")
-        self.master.update_idletasks()
+        self.master.update()
     
     def done(self):
         self.frame.destroy()
-        self.master.update_idletasks()
+        self.master.update()
 
 class App(ctk.CTk):
     def __init__(self):
@@ -305,6 +306,11 @@ class App(ctk.CTk):
             # print(command)
             # os.system(command)
             # os.remove(title)
+    
+    def resetCache(self, params):
+        version = f"{str(sys.version).split('.')[0]}{str(sys.version).split('.')[1]}"
+        os.remove(f"{Path.home()}\\AppData\\Roaming\\Python\\Python{version}\\site-packages\\pytube\\__cache__\\tokens.json")
+        self.tryLoad(params[0], params[1])
 
     def tryLoad(self, url, mode):
         try:
@@ -322,6 +328,8 @@ class App(ctk.CTk):
                 return "Invalid playlist URL"
             elif error == "HTTP Error 410: Gone":
                 return "Cannot access pytube servers, please try again!"
+            elif error == "HTTP Error 400: Bad Request":
+                self.resetCache([url, mode])
             elif "is streaming live and cannot be loaded" in error:
                 return "Cannot download livestreams!"
             else:
