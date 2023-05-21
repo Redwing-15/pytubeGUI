@@ -10,9 +10,6 @@ import re
 import os
 import sys
 from pathlib import Path
-# Todo:
-# Rework file system as a class, rather than a list
-# Learn + add threading
 
 class ProgressFrame():
     def __init__(self, master, text):
@@ -37,6 +34,7 @@ class ProgressFrame():
         self.master.update()
     
     def set(self, value):
+        value /= 100
         self.progressBar.set(value)
         self.progressText.configure(text = f"{self.text}\n{round(value*100, 1)}%")
         self.master.update()
@@ -46,8 +44,68 @@ class ProgressFrame():
         self.master.update()
 
 class Video():
-    def __init__(self):
+    def __init__(self, url):
         super().__init__()
+        self.isVideo = 1
+        if "playlist?list" in url:
+            self.isVideo = 0
+        
+        self.url = url
+        self.getVideo()
+    
+    def getVideo(self):
+        self.tryLoad()
+
+        if not self.isVideo: return
+
+        dict = {}
+        for stream in self.streams:
+            streamInfo = str(stream).split('\"')
+            String = f"{streamInfo[5]}"
+            if "video" in streamInfo[3]:
+                String += f"/{streamInfo[7]}"
+            if not String in dict:
+                dict.update({String:stream})
+        self.streams = dict
+
+        self.title = self.video.title
+        thumbnail = Image.open(requests.get(self.video.thumbnail_url, stream=True).raw)
+        self.thumbnail = ctk.CTkImage(thumbnail, size = (640, 480))
+        self.mode = "Video"
+        self.selectedStream = "Quality"
+        self.outputTitle = self.title
+        self.outputExtension = ".mp4"
+        self.fileSize = 0
+        self.outputPath = os.path.abspath(".")
+
+    def tryLoad(self):
+        try:
+            if not self.isVideo:
+                self.video = Playlist(self.url)
+            else:
+                self.video = YouTube(self.url, use_oauth=True, allow_oauth_cache=True)
+                self.streams = self.video.streams
+        except Exception as e:
+            error = str(e)
+            print(error)
+            if "regex_search" in error:#
+                error =  "Invalid video URL"
+            elif error == "\'list\'":
+                error = "Invalid playlist URL"
+            elif error == "HTTP Error 410: Gone":
+                error = "Cannot access pytube servers, please try again!"
+            elif error == "HTTP Error 400: Bad Request":
+                self.resetCache()
+            elif "is streaming live and cannot be loaded" in error:
+                error = "Cannot download livestreams!"
+
+            CTkMessagebox(title="Error", message=error, icon="cancel")
+        return
+    
+    def resetCache(self):
+        version = f"{str(sys.version).split('.')[0]}{str(sys.version).split('.')[1]}"
+        os.remove(f"{Path.home()}\\AppData\\Roaming\\Python\\Python{version}\\site-packages\\pytube\\__cache__\\tokens.json")
+        self.tryLoad()
 
 class App(ctk.CTk):
     def __init__(self):
@@ -60,17 +118,10 @@ class App(ctk.CTk):
         self.resizable (False, False)
         self.protocol("WM_DELETE_WINDOW", self.closing)
 
-        self.playlist = False
         self.fileNum = 0
         self.url = ""
-
-        self.videoURL = ""
         self.video = None
-        self.mode = "Video"
-        self.thumbnail = None
-        self.selectedStream = ""
-        self.streams = {}
-        self.path = os.path.abspath(".")
+        self.multiTasking = False
         
         self.createWidgets()
 
@@ -110,7 +161,10 @@ class App(ctk.CTk):
         self.outputFrame = ctk.CTkFrame(self.fileFrame)
         self.outputFrame.pack()
 
-        self.outputEntry = ctk.CTkEntry(self.outputFrame, width = 300, state = "disabled")
+        self.outputVariable = ctk.StringVar()
+        self.outputVariable.trace("w", lambda var_name, var_index, operation: self.outputChanged())
+
+        self.outputEntry = ctk.CTkEntry(self.outputFrame, width = 300, textvariable=self.outputVariable, state = "disabled")
         self.outputEntry.pack(side="left")
 
         self.outputPath = ctk.CTkButton(self.outputFrame, text = "V", width = 10, command = self.selectOutput)
@@ -128,183 +182,176 @@ class App(ctk.CTk):
         self.videoThumbnail = ctk.CTkLabel(self.thumbnailFrame, text = "")
         self.videoThumbnail.pack()
 
-        # self.update_idletasks()
-        # self.urlEntry.insert(0, "youtube.com/watch?v=KmweVl9cUtA&")
-        # self.updateURL()
+        self.update_idletasks() # Playlist: youtube.com/playlist?list=PLFt_AvWsXl0dPhqVsKt1Ni_46ARyiCGSq
+        self.urlEntry.insert(0, "youtube.com/playlist?list=PLFt_AvWsXl0dPhqVsKt1Ni_46ARyiCGSq") # Video: youtube.com/watch?v=QZwneRb-zqA
+        self.updateURL()
 
     def updateFile(self, newNum):
         num = self.fileNum + newNum
         if num < 0 or num == len(self.videos): return
-        if newNum != 0:
-            self.videos[self.fileNum] = [self.video, self.videoURL, self.video.title, self.thumbnail, self.mode, self.selectedStream, self.streams, self.outputName, self.path]
 
-        progress = ProgressFrame(self, "Loading data, please wait!")
         self.fileNum = num
+        self.video = self.videos[self.fileNum]
 
-        self.video = self.videos[num][0]
-        self.videoURL = self.videos[num][1]
-        self.thumbnail = self.videos[num][3]
-        self.mode = self.videos[num][4]
-        self.selectedStream = self.videos[num][5]
-        self.streams = self.videos[num][6]
-        self.outputName = self.videos[num][7]
-        self.path = self.videos[num][8]
-
-        self.modeSelect.set(self.mode)
-        self.streamSelect.set(self.selectedStream)
+        self.modeSelect.set(self.video.mode)
+        self.streamSelect.set(self.video.selectedStream)
         self.fileName.configure(text = f"Video {self.fileNum+1}/{len(self.videos)}")
 
-        self.videoThumbnail.configure(image = self.videos[num][3])
-        progress.set(0.875)
+        self.videoThumbnail.configure(image = self.video.thumbnail)
+
         self.updateWidgets()
-        
-        progress.progress(12.5)
-        progress.done()
-        
 
     def updateWidgets(self):
         options = []
-        for item in self.streams:
-            if not self.mode.lower() in str(self.streams[item]): continue
-            if self.mode == "Video":
+        for item in self.video.streams:
+            if not self.video.mode.lower() in str(self.video.streams[item]): continue
+            if self.video.mode == "Video":
                 item = item.split('/')
             else:
                 item = re.split('(\d+)',item)
             options.append(item)
         
-        if self.mode == "Video":
+        if self.video.mode == "Video":
             options = sorted(options, key=lambda x: (int(x[0][:-1]), int(x[1][:-3])), reverse=True)
             for n in range(len(options)):
                 options[n] = "/".join(options[n])
-        elif self.mode == "Audio":
+        elif self.video.mode == "Audio":
             options = sorted(options, key=lambda x: int(x[1]), reverse=True)
             for n in range(len(options)):
                 options[n] = "".join(options[n])
         
-        time = "{:02}:{:02}".format(self.video.length%3600//60, self.video.length%60)
-        if self.video.length >= 3600: time = f"{self.video.length//3600}:{time}"
-        self.infoLbl.configure(text = f"URL: {self.videoURL}\nTitle: {self.video.title}\nLength: {time}s")
+        time = "{:02}:{:02}".format(self.video.video.length%3600//60, self.video.video.length%60)
+        if self.video.video.length >= 3600: time = f"{self.video.video.length//3600}:{time}"
+        self.infoLbl.configure(text = f"URL: {self.video.url}\nTitle: {self.video.title}\nLength: {time}s")
         fileSize = 0
-        if self.selectedStream != "Quality": 
-            fileSize = self.streams[self.selectedStream].filesize
+        if self.video.selectedStream != "Quality": 
+            fileSize = self.video.streams[self.video.selectedStream].filesize
             if fileSize > 1000000000:
                 fileSize = str(f"{round(fileSize/1000000000, 2)}Gb")
             else:
                 fileSize = str(f"{round(fileSize/1000000, 2)}Mb")
+        self.video.fileSize = fileSize
 
-        self.outputEntry.configure(state = "normal")
-        self.outputEntry.delete(0, ctk.END)
-        self.outputEntry.insert(0, self.video.title)
+        self.outputVariable.set(self.video.outputTitle)
 
-        self.outputInfo.configure(text = f"Path: {self.path}\nFormat: mp4\nFilesize: {fileSize}")
+        self.outputInfo.configure(text = f"Path: {self.video.outputPath}\\{self.video.outputTitle}\nFormat: {self.video.outputExtension}\nFilesize: {self.video.fileSize}")
         self.streamSelect.configure(values = options)
+
+    def getVideo(self, temp, url):
+        self.video = Video(url)
+        self.progress = 5
+        if not self.video.isVideo:
+            inc = round(95 / len(self.video.video), 2)
+            for video in self.video.video:
+                self.videos.append(Video(video))
+                self.progress += inc
+            self.video = self.videos[0]
+        else:
+            self.progress = 100
+            self.videos.append(self.video)
+        self.multiTasking = False
 
     def updateURL(self):
         if self.urlEntry.get() == self.url: return
-        Input = self.urlEntry.get()
-        progress = ProgressFrame(self, "Loading videos please wait!")
-        if "playlist?list" in Input:
-            playlist = self.tryLoad(Input, 1)
-            if type(playlist) == str:
-                CTkMessagebox(title="Error", message=playlist, icon="cancel")
-                progress.done()
-                return
-            self.playlist = playlist
-            self.videos = []
-            inc = round(5 / len(self.playlist), 2)
-            for url in self.playlist:
-                video = self.tryLoad(url, 0)
-                if type(video) == str:
-                    CTkMessagebox(title="Error", message=video, icon="cancel")
-                    progress.done()
-                    return
-                self.videos.append([video, Input])
-                progress.progress(inc)
-        else:
-            self.playlist = False
-            video = self.tryLoad(Input, 0)
-            if type(video) == str:
-                CTkMessagebox(title="Error", message=video, icon="cancel")
-                progress.done()
-                return
-            self.videos = [[video, Input]]
-        self.url = Input
-        progress.set(0.05)
-        inc = round(95 / len(self.videos), 2)
-        for n in range(len(self.videos)):
-            video = self.videos[n][0]
-            dict = {}
-            streams = video.streams
-            for stream in streams:
-                streamInfo = str(stream).split('\"')
-                string = f"{streamInfo[5]}"
-                if "video" in streamInfo[3]:
-                    string += f"/{streamInfo[7]}"
-                if not string in dict:
-                    dict.update({string:stream})
-            url = self.videos[n][1]
-            title = video.title
-            thumbnail = Image.open(requests.get(video.thumbnail_url, stream=True).raw)
-            thumbnail = ctk.CTkImage(thumbnail, size = (640, 480))
-            mode = self.mode
-            selectedStream = "Quality"
-            outputPath = f"{self.path}\\{title}"
-            self.videos[n] = [video, url, title, thumbnail, mode, selectedStream, dict, title, outputPath]
-            progress.progress(inc)
+        self.url = self.urlEntry.get()
+        self.videos = []
+
+        thread = threading.Thread(target = self.getVideo, args=(self, self.url),daemon=True)
+        thread.start()
+
+        self.multiTasking = True
+        self.progress = 0
+
+        self.urlEntry.configure(state="disabled")
+        self.downloadButton.configure(state="disabled")
+        for item in self.fileFrame.winfo_children():
+            if str(type(item)) == "<class \'customtkinter.windows.widgets.ctk_frame.CTkFrame\'>":
+                for child in item.winfo_children():
+                    child.configure(state="disabled")
+
+        progress = ProgressFrame(self, "Loading videos, please wait!")
+        while self.multiTasking:
+            progress.set(self.progress)
+        
+        for item in self.fileFrame.winfo_children():
+            if str(type(item)) == "<class \'customtkinter.windows.widgets.ctk_frame.CTkFrame\'>":
+                for child in item.winfo_children():
+                    child.configure(state="normal")
+        self.downloadButton.configure(state="normal")
+        self.urlEntry.configure(state="normal")
+        self.outputEntry.configure(state = "normal")
+
+        progress.set(self.progress)
         progress.done()
+
         self.updateFile(0)
 
     def updateMode(self, choice):
-        if self.mode == choice: return
-        self.mode = choice
+        if self.video.mode == choice: return
+        self.video.mode = choice
         self.streamSelect.set("Quality")
-        self.selectedStream = "Quality"
+        self.video.selectedStream = "Quality"
+        if choice == "Video":
+            self.video.outputExtension = ".mp4"
+        else:
+            self.video.outputExtension = ".mp3"
+
         self.updateWidgets()
 
     def updateStream(self, choice):
-        if self.selectedStream == choice: return
-        self.selectedStream = choice
+        if self.video.selectedStream == choice: return
+        self.video.selectedStream = choice
+
         self.updateWidgets()
     
     def selectOutput(self):
-        if self.mode == "Audio":
-            fileTypes = [("MPEG", "*.mp3", "*.mpeg"), "*.wav", "*.webm", "*.mp4", "*.3gp", "*.ogg"]
-        elif self.mode == "Video":
-            fileTypes = [("MPEG", "*.mp3 *.mpeg"), ("WAVE", ".wav"), ("WebM", ".webm"), ("MPEG-4", ".mp4"), ("3GPP", ".3gp"), ("Ogg", ".ogg")]
-        self.path = filedialog.asksaveasfilename(initialdir=self.path, initialfile=self.outputName, title="Output Directory", filetypes=fileTypes, defaultextension=("MPEG"))
-        print(Path(self.path).suffix)
+        if self.video.mode == "Video":
+            fileTypes = [("MPEG-4", ".mp4"), ("MPEG", ".mp3"), ("3GPP", ".3gp"), ("Ogg", ".ogg"), ("WebM", ".webm")]
+        elif self.video.mode == "Audio":
+            fileTypes = [("MPEG", ".mp3"), ("MPEG-4", ".mp4"), ("Ogg", ".ogg"), ("WAVE", ".wav"), ("WebM", ".webm")]
+        path = filedialog.asksaveasfilename(initialdir=self.video.outputPath, initialfile=self.video.outputTitle, title="Output Directory", filetypes=fileTypes, defaultextension=self.video.outputExtension)
+        self.video.outputExtension = str(Path(path).suffix)
+        self.video.outputPath = path[:-(len(self.video.outputExtension)+len(self.video.outputTitle))]
+        print(self.video.outputPath)
+
         self.updateWidgets()
 
     def download(self):
-        self.videos[self.fileNum] = [self.video, self.videoURL, self.video.title, self.thumbnail, self.mode, self.selectedStream, self.streams, self.outputName, self.path]
-
         downloads = []
+        n = 0
         for item in self.videos:    
-            video = item[0]
-            selectedStream = item[5]
-            for stream in self.streams:
-                if selectedStream == "Quality":
+            if re.search('r[<>:"\/|?*]', item.outputTitle):
+                CTkMessagebox(title="Warning Message!", message="Illegal character in title! Cannot contain: \'<>:/\\?*\'", icon="warning")
+                self.video = item
+                self.updateFile(n - self.fileNum)
+                return
+            for stream in item.streams:
+                if item.selectedStream == "Quality":
                     CTkMessagebox(title="Warning Message!", message="Please select a quality", icon="warning")
+                    self.video = item
+                    self.updateFile(n - self.fileNum)
                     return
-                elif stream != selectedStream: continue
-
-                stream = self.streams[stream]
+                elif stream != item.selectedStream: continue
+                stream = item.streams[stream]
                 itag = str(stream).split('\"')
+                extension = itag[3][6:]
                 itag = itag[1]
-                downloads.append([video, itag])
+                downloads.append([item.video, itag, extension, [item.outputPath, item.outputTitle, item.outputExtension]])
                 break
-        
+            n += 1
+        # print(downloads)
         inc = round(100 / (len(downloads)*3), 2)
         progress = ProgressFrame(self, "Downloading Videos.\nThis may take a while.")
-        for list in downloads:
-            video = list[0]
+        for download in downloads:
+            video = download[0]
             progress.progress(inc)
-            video = video.streams.get_by_itag(list[1])
+            stream = video.streams.get_by_itag(download[1])
             progress.progress(inc)
-            video.download()
+            title = f"{download[3][1]}.{download[2]}"
+            print(f"{download[3][0]}, {title}")
+            stream.download(download[3][0], title)
             progress.progress(inc)
         progress.done()
-        print("Done")
 
         # stream.download()
                 # else:
@@ -314,37 +361,13 @@ class App(ctk.CTk):
             # print(command)
             # os.system(command)
             # os.remove(title)
-    
-    def resetCache(self, params):
-        version = f"{str(sys.version).split('.')[0]}{str(sys.version).split('.')[1]}"
-        os.remove(f"{Path.home()}\\AppData\\Roaming\\Python\\Python{version}\\site-packages\\pytube\\__cache__\\tokens.json")
-        self.tryLoad(params[0], params[1])
 
-    def tryLoad(self, url, mode):
-        try:
-            if mode == 1:
-                playlist = Playlist(url)
-                url = playlist[0]
-            video = YouTube(url, use_oauth=True, allow_oauth_cache=True)
-            streams = video.streams
-        except Exception as e:
-            error = str(e)
-            print(error)
-            if "regex_search" in error:
-                return "Invalid video URL"
-            elif error == "\'list\'":
-                return "Invalid playlist URL"
-            elif error == "HTTP Error 410: Gone":
-                return "Cannot access pytube servers, please try again!"
-            elif error == "HTTP Error 400: Bad Request":
-                self.resetCache([url, mode])
-            elif "is streaming live and cannot be loaded" in error:
-                return "Cannot download livestreams!"
-            else:
-                return error
-        if mode == 1:
-            return playlist
-        return video
+    def outputChanged(self):
+        if self.video == None or self.outputVariable.get() == self.video.outputTitle:
+            return
+        print(self.outputVariable.get())
+        self.video.outputTitle = self.outputVariable.get()
+        self.updateWidgets()
 
     def closing(self):
         self.destroy()
