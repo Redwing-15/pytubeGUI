@@ -10,11 +10,14 @@ import re
 import os
 import sys
 from pathlib import Path
-
-class ProgressFrame():
-    def __init__(self, master, text):
+# Todo: add threading for the download
+# Rework outputEntry validation system
+# Rework file downloading to only download as mp4 and mp3
+class progressFrame():
+    def __init__(self, master, text, isDownloading):
         super().__init__()
         self.master = master
+        self.isDownloading = isDownloading
 
         self.frame = ctk.CTkFrame(master)
         self.frame.place(relx=0.5, rely=0.5, anchor="center")
@@ -26,17 +29,29 @@ class ProgressFrame():
         self.progressBar = ctk.CTkProgressBar(self.frame, width = 400)
         self.progressBar.set(0)
         self.progressBar.pack()
+
         self.master.update()
 
     def progress(self, increment):
         self.progressBar.set(round(self.progressBar.get() + (increment/100), 4))
-        self.progressText.configure(text = f"{self.text}\n{round(self.progressBar.get()*100, 1)}%")
+        if self.isDownloading:
+            text = f"{self.text}\n{round(self.progressBar.get()*100, 1)}%"
+            # print(text)
+        else:
+            text = f"{self.text}\n{round(self.progressBar.get()*100, 1)}%"
+
+        self.progressText.configure(text = text)
         self.master.update()
     
     def set(self, value):
         value /= 100
         self.progressBar.set(value)
-        self.progressText.configure(text = f"{self.text}\n{round(value*100, 1)}%")
+        if self.isDownloading:
+            text = f"{self.text}\n{round(self.progressBar.get()*100, 1)}%"
+            # print(text)
+        else:
+            text = f"{self.text}\n{round(self.progressBar.get()*100, 1)}%"
+        self.progressText.configure(text = text)
         self.master.update()
     
     def done(self):
@@ -58,8 +73,12 @@ class Video():
 
         if not self.isVideo: return
 
+        streams = list(self.streams.filter(progressive=True))
+        streams += list(self.streams.filter(only_video=True))
+        streams += list(self.streams.filter(only_audio=True))
+
         dict = {}
-        for stream in self.streams:
+        for stream in streams:
             streamInfo = str(stream).split('\"')
             String = f"{streamInfo[5]}"
             if "video" in streamInfo[3]:
@@ -87,7 +106,6 @@ class Video():
                 self.streams = self.video.streams
         except Exception as e:
             error = str(e)
-            print(error)
             if "regex_search" in error:#
                 error =  "Invalid video URL"
             elif error == "\'list\'":
@@ -110,6 +128,7 @@ class Video():
 class App(ctk.CTk):
     def __init__(self):
         super().__init__()
+        self.path = os.path.abspath(".")
         WIDTH = 1200
         HEIGHT = 600
         self.geometry('%dx%d+%d+%d' % (WIDTH, HEIGHT, int(self.winfo_screenwidth()/2 - WIDTH/2), int(self.winfo_screenheight()/2 - HEIGHT/2)))
@@ -183,7 +202,7 @@ class App(ctk.CTk):
         self.videoThumbnail.pack()
 
         self.update_idletasks() # Playlist: youtube.com/playlist?list=PLFt_AvWsXl0dPhqVsKt1Ni_46ARyiCGSq
-        self.urlEntry.insert(0, "youtube.com/playlist?list=PLFt_AvWsXl0dPhqVsKt1Ni_46ARyiCGSq") # Video: youtube.com/watch?v=QZwneRb-zqA
+        self.urlEntry.insert(0, "youtube.com/watch?v=QZwneRb-zqA") # Video: youtube.com/watch?v=QZwneRb-zqA
         self.updateURL()
 
     def updateFile(self, newNum):
@@ -265,11 +284,11 @@ class App(ctk.CTk):
         self.urlEntry.configure(state="disabled")
         self.downloadButton.configure(state="disabled")
         for item in self.fileFrame.winfo_children():
-            if str(type(item)) == "<class \'customtkinter.windows.widgets.ctk_frame.CTkFrame\'>":
+            if str(type(item)) == "<class \'customtkinter.windows.widge6ts.ctk_frame.CTkFrame\'>":
                 for child in item.winfo_children():
                     child.configure(state="disabled")
 
-        progress = ProgressFrame(self, "Loading videos, please wait!")
+        progress = progressFrame(self, "Loading videos, please wait!", False)
         while self.multiTasking:
             progress.set(self.progress)
         
@@ -307,53 +326,92 @@ class App(ctk.CTk):
     def selectOutput(self):
         if self.video.mode == "Video":
             fileTypes = [("MPEG-4", ".mp4"), ("MPEG", ".mp3"), ("3GPP", ".3gp"), ("Ogg", ".ogg"), ("WebM", ".webm")]
-        elif self.video.mode == "Audio":
+        elif self.video.mode == "Audio": 
             fileTypes = [("MPEG", ".mp3"), ("MPEG-4", ".mp4"), ("Ogg", ".ogg"), ("WAVE", ".wav"), ("WebM", ".webm")]
         path = filedialog.asksaveasfilename(initialdir=self.video.outputPath, initialfile=self.video.outputTitle, title="Output Directory", filetypes=fileTypes, defaultextension=self.video.outputExtension)
         self.video.outputExtension = str(Path(path).suffix)
         self.video.outputPath = path[:-(len(self.video.outputExtension)+len(self.video.outputTitle))]
-        print(self.video.outputPath)
+        # print(self.video.outputPath)
 
         self.updateWidgets()
 
     def download(self):
         downloads = []
-        n = 0
+        i = 0
         for item in self.videos:    
-            if re.search('r[<>:"\/|?*]', item.outputTitle):
+            if re.search(r'[<>:"\/|?*]', item.outputTitle):
                 CTkMessagebox(title="Warning Message!", message="Illegal character in title! Cannot contain: \'<>:/\\?*\'", icon="warning")
                 self.video = item
-                self.updateFile(n - self.fileNum)
+                self.updateFile(i - self.fileNum)
                 return
             for stream in item.streams:
                 if item.selectedStream == "Quality":
                     CTkMessagebox(title="Warning Message!", message="Please select a quality", icon="warning")
                     self.video = item
-                    self.updateFile(n - self.fileNum)
+                    self.updateFile(i - self.fileNum)
                     return
                 elif stream != item.selectedStream: continue
-                stream = item.streams[stream]
-                itag = str(stream).split('\"')
-                extension = itag[3][6:]
-                itag = itag[1]
-                downloads.append([item.video, itag, extension, [item.outputPath, item.outputTitle, item.outputExtension]])
+                stream = str(item.streams[stream]).split('\"')
+                downloads.append([item, stream])
                 break
-            n += 1
-        # print(downloads)
-        inc = round(100 / (len(downloads)*3), 2)
-        progress = ProgressFrame(self, "Downloading Videos.\nThis may take a while.")
-        for download in downloads:
-            video = download[0]
-            progress.progress(inc)
-            stream = video.streams.get_by_itag(download[1])
-            progress.progress(inc)
-            title = f"{download[3][1]}.{download[2]}"
-            print(f"{download[3][0]}, {title}")
-            stream.download(download[3][0], title)
-            progress.progress(inc)
-        progress.done()
+            i += 1
 
-        # stream.download()
+        inc = round(100 / (len(downloads)*3), 2)
+        progress = progressFrame(self, "Downloading Videos.\nThis may take a while.", True)
+        for download in downloads:
+            Video = download[0]
+            progress.progress(inc)
+            stream = Video.video.streams.get_by_itag(download[1][1])
+            progress.progress(inc)
+            title = f"{Video.outputTitle}_video.{download[1][3][6:]}"
+            stream.download(f"{Video.outputPath}\\temp", title)
+            progress.progress(inc)
+        progress.done() 
+        
+        for download in downloads:
+            if download[1][11] != "False": # Is an audio stream or progressive  
+                download[1] =  f"{self.path}\\temp\\{download[0].outputTitle}_video.{download[1][3][6:]}"
+                continue
+            audioStream = download[0].video.streams.filter(only_audio=True).last()
+            stream = str(audioStream).split('\"')
+
+            audioTitle = f"temp\\{download[0].outputTitle}_audio.{stream[3][6:]}"
+            audioStream.download(download[0].outputPath, audioTitle)
+
+            videoTitle = f"{self.path}\\temp\\{download[0].outputTitle}_video.{download[1][3][6:]}"   
+            outputTitle = f"{self.path}\\temp\\{download[0].outputTitle}.mkv"
+            command = f"ffmpeg -i \"{videoTitle}\" -i \"{audioTitle}\" -c copy \"{outputTitle}\""
+
+            os.system(command)
+            download[1] = outputTitle
+
+        for download in downloads:
+            
+            default = download[1].split('.')
+            default = f".{default[len(default)-1]}"
+
+            if default == download[0].outputExtension:
+                path = f"{download[0].outputPath}\\{download[0].outputTitle}{download[0].outputExtension}"
+                print(download[1], path)
+                os.rename(download[1], path)
+                continue
+            codecs = {".mp3":"PCM", ".mp4":"mpeg4", ".ogg":"opus", ".wav":"", ".webm":"opus"}
+            outputTitle = f"{download[0].outputPath}\\{download[0].outputTitle}{download[0].outputExtension}"
+
+            if download[0].isVideo:
+                print(download[0].outputExtension.replace('.', ''))
+                command = f"ffmpeg -i \"{download[1]}\" -c:v libx264 -qp 0 \"{outputTitle}\""
+                print(command)
+                os.system(command)
+            else:
+                command = f"ffmpeg -i \"{download[1]}\" -vn -ab 128k -ar 44100 -y \"{outputTitle}\""
+                print(command)
+                os.system(command)
+        
+        for subdir, dirs, files in os.walk("temp"):
+            for file in files:
+                os.remove(os.path.abspath(f"temp\\{file}"))
+        os.rmdir("temp")
                 # else:
             # stream = video.streams.get_by_itag(stream.selectedStream)
             # stream.download(None, title)
@@ -362,10 +420,9 @@ class App(ctk.CTk):
             # os.system(command)
             # os.remove(title)
 
-    def outputChanged(self):
+    def outputChanged(self): # Allow user to type in illegal characters, but if detected it will popup saying "Changes wont be saved" and will use the last valid name
         if self.video == None or self.outputVariable.get() == self.video.outputTitle:
             return
-        print(self.outputVariable.get())
         self.video.outputTitle = self.outputVariable.get()
         self.updateWidgets()
 
